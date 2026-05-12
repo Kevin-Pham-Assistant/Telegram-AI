@@ -1,33 +1,40 @@
 require('dotenv').config();
 
-const sqlite3 =
- require('sqlite3').verbose();
-
-const db =
- new sqlite3.Database('memory.db');
-
-db.run(`
-CREATE TABLE IF NOT EXISTS messages (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- chatId TEXT,
- role TEXT,
- content TEXT
-)
-`);
-
-db.run(`
-CREATE TABLE IF NOT EXISTS memories (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- chatId TEXT,
- fact TEXT
-)
-`);
+const { Pool } = require('pg');
 
 const TelegramBot =
  require('node-telegram-bot-api');
 
 const OpenAI =
  require('openai');
+
+const pool = new Pool({
+ connectionString: process.env.DATABASE_URL,
+ ssl: {
+   rejectUnauthorized: false
+ }
+});
+
+(async ()=>{
+
+ await pool.query(`
+ CREATE TABLE IF NOT EXISTS messages (
+   id SERIAL PRIMARY KEY,
+   chatId TEXT,
+   role TEXT,
+   content TEXT
+ )
+ `);
+
+ await pool.query(`
+ CREATE TABLE IF NOT EXISTS memories (
+   id SERIAL PRIMARY KEY,
+   chatId TEXT,
+   fact TEXT
+ )
+ `);
+
+})();
 
 const bot =
  new TelegramBot(
@@ -42,36 +49,40 @@ const openai =
 
 bot.on('message', async (msg)=>{
 
-   const chatId = msg.chat.id;
+ try{
+
+   const chatId = msg.chat.id.toString();
    const text = msg.text;
 
-   db.all(
-    `SELECT role, content
-     FROM messages
-     WHERE chatId = ?
-     ORDER BY id ASC
-     LIMIT 20`,
-    [chatId],
+   const messageResult =
+    await pool.query(
+      `
+      SELECT role, content
+      FROM messages
+      WHERE chatId = $1
+      ORDER BY id ASC
+      LIMIT 20
+      `,
+      [chatId]
+    );
 
-   async (err, rows)=>{
+   const memoryResult =
+    await pool.query(
+      `
+      SELECT fact
+      FROM memories
+      WHERE chatId = $1
+      `,
+      [chatId]
+    );
 
-      if(err){
-         console.log(err);
-         return;
-      }
+   const rows = messageResult.rows;
+   const memoryRows = memoryResult.rows;
 
-db.all(
- `SELECT fact
-  FROM memories
-  WHERE chatId = ?`,
- [chatId],
-
- async (err, memoryRows)=>{    
-
-const messages = [
-   {
-      role:"system",
-      content:`
+   const messages = [
+      {
+         role:"system",
+         content:`
 You are Kevin Assistant.
 
 You CAN remember information across conversations.
@@ -84,76 +95,79 @@ acknowledge naturally and say you will remember it.
 You are a persistent AI assistant,
 not a temporary chat session.
 
+Always translate important English technical terms
+into Vietnamese in parentheses.
+
 User memories:
 ${memoryRows.map(x => x.fact).join("\n")}
 `
-   },
+      },
 
-   ...(rows || [])
-];
+      ...rows
+   ];
 
-messages.push({
-   role:"user",
-   content:text
-});
+   messages.push({
+      role:"user",
+      content:text
+   });
 
-if(
- text.toLowerCase().includes("hãy nhớ") ||
- text.toLowerCase().includes("remember")
-){
+   if(
+    text.toLowerCase().includes("hãy nhớ") ||
+    text.toLowerCase().includes("remember")
+   ){
 
-   db.run(
-    `INSERT INTO memories
-     (chatId, fact)
-     VALUES (?, ?)`,
-    [chatId, text]
+      await pool.query(
+       `
+       INSERT INTO memories
+       (chatId, fact)
+       VALUES ($1, $2)
+       `,
+       [chatId, text]
+      );
+   }
+
+   const response =
+    await openai.chat.completions.create({
+      model:"gpt-4.1-mini",
+      messages:messages
+    });
+
+   const reply =
+    response.choices[0]
+    .message.content;
+
+   await pool.query(
+    `
+    INSERT INTO messages
+    (chatId, role, content)
+    VALUES ($1, $2, $3)
+    `,
+    [chatId, "user", text]
    );
-}
 
-      try{
+   await pool.query(
+    `
+    INSERT INTO messages
+    (chatId, role, content)
+    VALUES ($1, $2, $3)
+    `,
+    [chatId, "assistant", reply]
+   );
 
-         const response =
-          await openai.chat.completions.create({
-            model:"gpt-4.1-mini",
-            messages:messages
-          });
+   bot.sendMessage(
+    chatId,
+    reply.substring(0,4000)
+   );
 
-         const reply =
-          response.choices[0]
-          .message.content;
+ }catch(err){
 
-         db.run(
-          `INSERT INTO messages
-           (chatId, role, content)
-           VALUES (?, ?, ?)`,
-          [chatId, "user", text]
-         );
+   console.log(err);
 
-         db.run(
-          `INSERT INTO messages
-           (chatId, role, content)
-           VALUES (?, ?, ?)`,
-          [chatId, "assistant", reply]
-         );
+   bot.sendMessage(
+    msg.chat.id,
+    "Bot đang lỗi."
+   );
 
-         bot.sendMessage(
-           chatId,
-           reply.substring(0,4000)
-         );
-
-      }catch(err){
-
-         console.log(err);
-
-         bot.sendMessage(
-          chatId,
-          "Bot đang lỗi."
-        );
-
-}
-
-   });
-
-   });
+ }
 
 });
