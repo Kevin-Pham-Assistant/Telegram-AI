@@ -51,8 +51,10 @@ bot.on('message', async (msg)=>{
 
  try{
 
-   const chatId = msg.chat.id.toString();
-   const text = msg.text;
+   const chatId = msg.chat.id;
+const text = msg.text;
+
+if (!text) return;
 
    const messageResult =
     await pool.query(
