@@ -48,7 +48,16 @@ const openai =
  });
 
 bot.on('message', async (msg)=>{
+const chatId = msg.chat.id;
+const text = msg.text;
 
+if (!text) {
+   bot.sendMessage(
+      chatId,
+      "Hiện tại mình chỉ xử lý text."
+   );
+   return;
+}
  try{
 
    const chatId = msg.chat.id;
