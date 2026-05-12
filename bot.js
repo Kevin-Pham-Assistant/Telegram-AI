@@ -15,6 +15,14 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 `);
 
+db.run(`
+CREATE TABLE IF NOT EXISTS memories (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ chatId TEXT,
+ fact TEXT
+)
+`);
+
 const TelegramBot =
  require('node-telegram-bot-api');
 
@@ -52,12 +60,55 @@ bot.on('message', async (msg)=>{
          return;
       }
 
-      const messages = rows || [];
+db.all(
+ `SELECT fact
+  FROM memories
+  WHERE chatId = ?`,
+ [chatId],
 
-      messages.push({
-         role:"user",
-         content:text
-      });
+ async (err, memoryRows)=>{    
+
+const messages = [
+   {
+      role:"system",
+      content:`
+You are Kevin Assistant.
+
+You CAN remember information across conversations.
+
+User memories are stored in a database.
+
+When the user asks you to remember something,
+acknowledge naturally and say you will remember it.
+
+You are a persistent AI assistant,
+not a temporary chat session.
+
+User memories:
+${memoryRows.map(x => x.fact).join("\n")}
+`
+   },
+
+   ...(rows || [])
+];
+
+messages.push({
+   role:"user",
+   content:text
+});
+
+if(
+ text.toLowerCase().includes("hãy nhớ") ||
+ text.toLowerCase().includes("remember")
+){
+
+   db.run(
+    `INSERT INTO memories
+     (chatId, fact)
+     VALUES (?, ?)`,
+    [chatId, text]
+   );
+}
 
       try{
 
@@ -100,6 +151,8 @@ bot.on('message', async (msg)=>{
         );
 
 }
+
+   });
 
    });
 
